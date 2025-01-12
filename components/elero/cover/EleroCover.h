@@ -15,9 +15,8 @@ class EleroCover : public cover::Cover, public Component {
   void loop() override;
   void dump_config() override;
   float get_setup_priority() const override;
-  
   cover::CoverTraits get_traits() override;
-  
+
   void set_elero_parent(Elero *parent) { this->parent_ = parent; }
   void set_blind_address(uint32_t address) { this->command_.blind_addr = address; }
   void set_channel(uint8_t channel) { this->command_.channel = channel; }
@@ -43,14 +42,14 @@ class EleroCover : public cover::Cover, public Component {
   void recompute_position();
   void start_movement(cover::CoverOperation op);
   bool is_at_target();
-  
+  bool has_elapsed(uint32_t start, uint32_t duration);  // Neu hinzugefügt
+  void report_error();  // Neu hinzugefügt
+
  protected:
   void control(const cover::CoverCall &call) override;
   void increase_counter();
 
-  t_elero_command command_ = {
-    .counter = 1,
-  };
+  t_elero_command command_ = {.counter = 1};
   Elero *parent_;
   uint32_t last_poll_{0};
   uint32_t last_command_{0};
@@ -61,6 +60,7 @@ class EleroCover : public cover::Cover, public Component {
   uint32_t last_publish_{0};
   uint32_t last_recompute_time_{0};
   uint32_t poll_intvl_{0};
+  uint32_t poll_intvl_moving_{500};  // Neu hinzugefügt, falls benötigt
   float target_position_{0};
   bool supports_tilt_{false};
   uint8_t command_up_{0x20};
@@ -76,4 +76,3 @@ class EleroCover : public cover::Cover, public Component {
 
 } // namespace elero
 } // namespace esphome
-

@@ -28,12 +28,12 @@ void EleroCover::loop() {
   uint32_t now = millis();
   if(this->current_operation != COVER_OPERATION_IDLE) {
     if((now - ELERO_TIMEOUT_MOVEMENT) < this->movement_start_) // do not poll frequently for an extended period of time
-      intvl = ELERO_POLL_INTERVAL_MOVING;
+      intvl = this->poll_intvl_moving_;
   }
 
-  if((now > this->poll_offset_) && (now - this->poll_offset_ - this->last_poll_) > intvl) {
+  if(has_elapsed(this->last_poll_, intvl)) {
     this->commands_to_send_.push(this->command_check_);
-    this->last_poll_ = now - this->poll_offset_;
+    this->last_poll_ = now;
   }
 
   this->handle_commands(now);
@@ -47,7 +47,7 @@ void EleroCover::loop() {
     }
 
     // Publish position every second
-    if(now - this->last_publish_ > 1000) {
+    if(has_elapsed(this->last_publish_, 1000)) {
       this->publish_state(false);
       this->last_publish_ = now;
     }
@@ -55,8 +55,6 @@ void EleroCover::loop() {
 }
 
 bool EleroCover::is_at_target() {
-  // We return false as we don't want to send a stop command for completely open or
-  // close - this is handled by the cover
   if((this->target_position_ == COVER_OPEN) || (this->target_position_ == COVER_CLOSED))
     return false;
 
@@ -72,8 +70,8 @@ bool EleroCover::is_at_target() {
 }
 
 void EleroCover::handle_commands(uint32_t now) {
-  if((now - this->last_command_) > ELERO_DELAY_SEND_PACKETS) {
-    if(this->commands_to_send_.size() > 0) {
+  if(has_elapsed(this->last_command_, ELERO_DELAY_SEND_PACKETS)) {
+    if(!this->commands_to_send_.empty()) {
       this->command_.payload[4] = this->commands_to_send_.front();
       if(this->parent_->send_command(&this->command_)) {
         this->send_packets_++;
@@ -82,12 +80,14 @@ void EleroCover::handle_commands(uint32_t now) {
           this->commands_to_send_.pop();
           this->send_packets_ = 0;
           this->increase_counter();
+          this->publish_state();
         }
       } else {
         ESP_LOGD(TAG, "Retry #%d for blind 0x%02x", this->send_retries_, this->command_.blind_addr);
         this->send_retries_++;
         if(this->send_retries_ > ELERO_SEND_RETRIES) {
           ESP_LOGE(TAG, "Hit maximum number of retries, giving up.");
+          this->report_error();
           this->send_retries_ = 0;
           this->commands_to_send_.pop();
         }
@@ -95,6 +95,10 @@ void EleroCover::handle_commands(uint32_t now) {
       this->last_command_ = now;
     }
   }
+}
+
+void EleroCover::report_error() {
+  ESP_LOGW(TAG, "Communication error with cover. Check connection or configuration.");
 }
 
 float EleroCover::get_setup_priority() const { return setup_priority::DATA; }
@@ -204,22 +208,17 @@ void EleroCover::control(const cover::CoverCall &call) {
   }
 }
 
-// FIXME: Most of this should probably be moved to the
-// handle_commands function to only publish a new state
-// if at least the transmission was successful
 void EleroCover::start_movement(CoverOperation dir) {
   switch(dir) {
     case COVER_OPERATION_OPENING:
       ESP_LOGV(TAG, "Sending OPEN command");
       this->commands_to_send_.push(this->command_up_);
-      // Reset tilt state on movement
       this->tilt = 0.0;
       this->last_operation_ = COVER_OPERATION_OPENING;
     break;
     case COVER_OPERATION_CLOSING:
       ESP_LOGV(TAG, "Sending CLOSE command");
       this->commands_to_send_.push(this->command_down_);
-      // Reset tilt state on movement
       this->tilt = 0.0;
       this->last_operation_ = COVER_OPERATION_CLOSING;
     break;
@@ -228,19 +227,16 @@ void EleroCover::start_movement(CoverOperation dir) {
     break;
   }
 
-  if(dir == this->current_operation)
-    return;
-
-  this->current_operation = dir;
-  this->movement_start_ = millis();
-  this->last_recompute_time_ = millis();
-  this->publish_state();
+  if(dir != this->current_operation) {
+    this->current_operation = dir;
+    this->movement_start_ = millis();
+    this->last_recompute_time_ = millis();
+  }
 }
 
 void EleroCover::recompute_position() {
   if(this->current_operation == COVER_OPERATION_IDLE)
     return;
-
 
   float dir;
   float action_dur;
@@ -262,7 +258,10 @@ void EleroCover::recompute_position() {
   this->position = clamp(this->position, 0.0f, 1.0f);
 
   this->last_recompute_time_ = now;
+}
 
+bool EleroCover::has_elapsed(uint32_t start, uint32_t duration) {
+  return (millis() - start) < duration;
 }
 
 } // namespace elero
